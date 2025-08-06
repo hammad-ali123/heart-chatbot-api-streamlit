@@ -6,7 +6,6 @@ from datetime import datetime
 import os
 import matplotlib.pyplot as plt
 
-
 # File to store prediction history
 CSV_FILE = "prediction_history.csv"
 
@@ -81,10 +80,22 @@ if st.button("Check Risk"):
         else:
             st.info("✅ This appears to be a low risk. Keep up the healthy lifestyle!")
 
+        # 🥧 Visualise the risk using a pie chart
+        labels = ['At Risk', 'No Risk']
+        sizes = [round(prediction, 2), 100 - round(prediction, 2)]
+        colors = ['red', 'green']
+
+        fig, ax = plt.subplots()
+        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+        ax.axis('equal')  # Equal aspect ratio ensures pie is circular
+
+        st.markdown("### 🧩 Risk Distribution")
+        st.pyplot(fig)
+
     except Exception as e:
         st.error(f"Something went wrong: {str(e)}")
 
+# 📥 Allow download of predictions
 if os.path.exists(CSV_FILE):
     with open(CSV_FILE, "rb") as f:
         st.download_button("📥 Download All Predictions", f, file_name=CSV_FILE)
-

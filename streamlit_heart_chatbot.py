@@ -1,6 +1,13 @@
 import streamlit as st
 import joblib
 import numpy as np
+import pandas as pd
+from datetime import datetime
+import os
+
+# File to store prediction history
+CSV_FILE = "prediction_history.csv"
+
 
 # Load model and scaler
 model = joblib.load("model.pkl")
@@ -45,3 +52,35 @@ if st.button("Check Risk"):
 
     except Exception as e:
         st.error(f"Something went wrong: {str(e)}")
+
+def save_prediction(data, prediction):
+    # Add timestamp and prediction to user input
+    data["prediction (%)"] = round(prediction, 2)
+    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Convert to DataFrame
+    df = pd.DataFrame([data])
+    
+    # Append to CSV
+    if os.path.exists(CSV_FILE):
+        df.to_csv(CSV_FILE, mode='a', header=False, index=False)
+    else:
+        df.to_csv(CSV_FILE, mode='w', header=True, index=False)
+# Assuming `input_data` is a dictionary of user responses
+save_prediction(input_data, prediction)
+input_data = {
+    "age": age,
+    "sex": sex,
+    "cp": cp,
+    "trestbps": trestbps,
+    "chol": chol,
+    "fbs": fbs,
+    "restecg": restecg,
+    "thalach": thalach,
+    "exang": exang,
+    "oldpeak": oldpeak,
+    "slope": slope,
+    "ca": ca,
+    "thal": thal
+}
+

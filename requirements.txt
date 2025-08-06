@@ -5,3 +5,4 @@ numpy
 xgboost
 matplotlib
 reportlab
+streamlit-chat

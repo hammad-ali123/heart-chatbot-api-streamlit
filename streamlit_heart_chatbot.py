@@ -1,11 +1,12 @@
 import streamlit as st
 from streamlit_chat import message
 import joblib
+import shap
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from datetime import datetime
 import os
-import matplotlib.pyplot as plt
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -14,6 +15,19 @@ from reportlab.pdfgen import canvas
 model = joblib.load("model.pkl")
 scaler = joblib.load("scaler.pkl")
 CSV_FILE = "prediction_history.csv"
+
+# SHAP explainer for XGBoost
+explainer = shap.TreeExplainer(model)
+
+# Save prediction
+def save_prediction(data, prediction):
+    data["prediction (%)"] = round(prediction, 2)
+    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df = pd.DataFrame([data])
+    if os.path.exists(CSV_FILE):
+        df.to_csv(CSV_FILE, mode='a', header=False, index=False)
+    else:
+        df.to_csv(CSV_FILE, mode='w', header=True, index=False)
 
 # Generate PDF report
 def generate_pdf(input_data, prediction):
@@ -32,12 +46,10 @@ def generate_pdf(input_data, prediction):
         "ca": "Major Vessels Colored (0–4)",
         "thal": "Thalassemia (0=Normal, 1=Fixed, 2=Reversible)"
     }
-
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     text = c.beginText(40, 750)
     text.setFont("Helvetica", 12)
-
     text.textLine("Heart Disease Risk Assessment Report")
     text.textLine("--------------------------------------")
     for key, value in input_data.items():
@@ -45,24 +57,13 @@ def generate_pdf(input_data, prediction):
         text.textLine(f"{label}: {value}")
     text.textLine(f"\nPredicted Risk: {round(prediction, 2)}%")
     text.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
     c.drawText(text)
     c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
 
-# Save prediction
-def save_prediction(data, prediction):
-    data["prediction (%)"] = round(prediction, 2)
-    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    df = pd.DataFrame([data])
-    if os.path.exists(CSV_FILE):
-        df.to_csv(CSV_FILE, mode='a', header=False, index=False)
-    else:
-        df.to_csv(CSV_FILE, mode='w', header=True, index=False)
-
-# Define questions
+# Questions
 questions = [
     {"key": "age", "text": "What is your age?", "type": int},
     {"key": "sex", "text": "What is your biological sex? (0 = Female, 1 = Male)", "type": int},
@@ -79,7 +80,7 @@ questions = [
     {"key": "thal", "text": "Thalassemia? (0=Normal, 1=Fixed, 2=Reversible)", "type": int}
 ]
 
-# Initial state
+# Session states
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "current_q" not in st.session_state:
@@ -90,15 +91,14 @@ if "answers" not in st.session_state:
 # Title
 st.title("💬 Heart Disease Risk Chatbot (Chat Mode)")
 
-# Chat history with unique keys
+# Display chat
 for i, msg in enumerate(st.session_state.chat_history):
     message(msg["text"], is_user=msg["is_user"], key=f"{'user' if msg['is_user'] else 'bot'}-{i}")
 
-# Question flow
+# Ask questions
 if st.session_state.current_q < len(questions):
     q = questions[st.session_state.current_q]
     user_input = st.chat_input(q["text"])
-
     if user_input:
         try:
             typed_input = q["type"](user_input)
@@ -110,12 +110,11 @@ if st.session_state.current_q < len(questions):
         except ValueError:
             st.warning("Please enter a valid value.")
 
-# All answers collected
+# After final answer
 else:
     inputs = [st.session_state.answers[q["key"]] for q in questions]
     input_array = scaler.transform([inputs])
     prediction = model.predict_proba(input_array)[0][1] * 100
-
     save_prediction(st.session_state.answers, prediction)
 
     st.success(f"🧠 Your predicted heart disease risk is **{round(prediction, 2)}%**.")
@@ -128,18 +127,33 @@ else:
 
     # Pie chart
     st.markdown("### 📊 Risk Distribution")
-    fig, ax = plt.subplots()
-    ax.pie([prediction, 100 - prediction], labels=["At Risk", "No Risk"],
-           colors=["red", "green"], autopct="%1.1f%%", startangle=90)
-    ax.axis("equal")
-    st.pyplot(fig)
+    fig1, ax1 = plt.subplots()
+    ax1.pie([prediction, 100 - prediction], labels=["At Risk", "No Risk"],
+            colors=["red", "green"], autopct="%1.1f%%", startangle=90)
+    ax1.axis("equal")
+    st.pyplot(fig1)
+
+    # SHAP bar plot
+    st.markdown("### 🧠 Feature Contributions (Explainability)")
+    shap_values = explainer.shap_values(input_array)
+    shap_df = pd.DataFrame({
+        "feature": [q["key"] for q in questions],
+        "value": input_array[0],
+        "shap": shap_values[0]
+    }).sort_values("shap", key=abs, ascending=False)
+
+    fig2, ax2 = plt.subplots(figsize=(8, 5))
+    bars = ax2.barh(shap_df["feature"], shap_df["shap"], color=["red" if x > 0 else "blue" for x in shap_df["shap"]])
+    ax2.set_xlabel("SHAP Value (Impact on Prediction)")
+    ax2.set_title("Top Feature Influences on Risk")
+    st.pyplot(fig2)
 
     # PDF
     pdf = generate_pdf(st.session_state.answers, prediction)
     st.download_button("📄 Download PDF Report", data=pdf,
                        file_name="heart_risk_report.pdf", mime="application/pdf")
 
-    # CSV download
+    # CSV
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE, "rb") as f:
             st.download_button("📥 Download All Predictions", f, file_name=CSV_FILE)

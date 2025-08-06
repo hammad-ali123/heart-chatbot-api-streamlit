@@ -4,3 +4,4 @@ joblib
 numpy
 xgboost
 matplotlib
+reportlab

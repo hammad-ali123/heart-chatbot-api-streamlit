@@ -8,14 +8,12 @@ import os
 # File to store prediction history
 CSV_FILE = "prediction_history.csv"
 
-
 # Load model and scaler
 model = joblib.load("model.pkl")
 scaler = joblib.load("scaler.pkl")
 
 # Title
 st.title("🫀 Heart Disease Risk Chatbot")
-
 st.markdown("Answer the questions below to assess your heart disease risk.")
 
 # Create input fields for all 13 parameters
@@ -33,15 +31,48 @@ slope = st.selectbox("Slope of the peak exercise ST segment", [0, 1, 2])
 ca = st.selectbox("Number of major vessels (0–4) colored by fluoroscopy", [0, 1, 2, 3, 4])
 thal = st.selectbox("Thalassemia (0 = normal, 1 = fixed defect, 2 = reversible defect)", [0, 1, 2])
 
+# Define the function to save results
+def save_prediction(data, prediction):
+    data["prediction (%)"] = round(prediction, 2)
+    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df = pd.DataFrame([data])
+    if os.path.exists(CSV_FILE):
+        df.to_csv(CSV_FILE, mode='a', header=False, index=False)
+    else:
+        df.to_csv(CSV_FILE, mode='w', header=True, index=False)
+
 # When button clicked
 if st.button("Check Risk"):
     try:
-        input_data = [
+        # Prepare input list for model
+        input_list = [
             age, sex, cp, trestbps, chol, fbs, restecg,
             thalach, exang, oldpeak, slope, ca, thal
         ]
-        input_array = scaler.transform([input_data])
+        input_array = scaler.transform([input_list])
         prediction = model.predict_proba(input_array)[0][1] * 100
+
+        # Prepare input dict for saving
+        input_data = {
+            "age": age,
+            "sex": sex,
+            "cp": cp,
+            "trestbps": trestbps,
+            "chol": chol,
+            "fbs": fbs,
+            "restecg": restecg,
+            "thalach": thalach,
+            "exang": exang,
+            "oldpeak": oldpeak,
+            "slope": slope,
+            "ca": ca,
+            "thal": thal
+        }
+
+        # Save prediction to CSV
+        save_prediction(input_data, prediction)
+
+        # Show prediction result
         st.success(f"🧠 Your predicted heart disease risk is **{round(prediction, 2)}%**.")
         if prediction > 70:
             st.warning("⚠️ This is a high risk. Please consult a medical professional.")
@@ -52,35 +83,3 @@ if st.button("Check Risk"):
 
     except Exception as e:
         st.error(f"Something went wrong: {str(e)}")
-
-def save_prediction(data, prediction):
-    # Add timestamp and prediction to user input
-    data["prediction (%)"] = round(prediction, 2)
-    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Convert to DataFrame
-    df = pd.DataFrame([data])
-    
-    # Append to CSV
-    if os.path.exists(CSV_FILE):
-        df.to_csv(CSV_FILE, mode='a', header=False, index=False)
-    else:
-        df.to_csv(CSV_FILE, mode='w', header=True, index=False)
-# Assuming `input_data` is a dictionary of user responses
-save_prediction(input_data, prediction)
-input_data = {
-    "age": age,
-    "sex": sex,
-    "cp": cp,
-    "trestbps": trestbps,
-    "chol": chol,
-    "fbs": fbs,
-    "restecg": restecg,
-    "thalach": thalach,
-    "exang": exang,
-    "oldpeak": oldpeak,
-    "slope": slope,
-    "ca": ca,
-    "thal": thal
-}
-

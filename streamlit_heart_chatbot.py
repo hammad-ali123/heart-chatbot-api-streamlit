@@ -31,7 +31,7 @@ slope = st.selectbox("Slope of the peak exercise ST segment", [0, 1, 2])
 ca = st.selectbox("Number of major vessels (0–4) colored by fluoroscopy", [0, 1, 2, 3, 4])
 thal = st.selectbox("Thalassemia (0 = normal, 1 = fixed defect, 2 = reversible defect)", [0, 1, 2])
 
-# Define the function to save results
+# Define function to save prediction
 def save_prediction(data, prediction):
     data["prediction (%)"] = round(prediction, 2)
     data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -41,18 +41,16 @@ def save_prediction(data, prediction):
     else:
         df.to_csv(CSV_FILE, mode='w', header=True, index=False)
 
-# When button clicked
+# Prediction logic
 if st.button("Check Risk"):
     try:
-        # Prepare input list for model
-        input_list = [
-            age, sex, cp, trestbps, chol, fbs, restecg,
-            thalach, exang, oldpeak, slope, ca, thal
-        ]
+        # List for model prediction
+        input_list = [age, sex, cp, trestbps, chol, fbs, restecg,
+                      thalach, exang, oldpeak, slope, ca, thal]
         input_array = scaler.transform([input_list])
         prediction = model.predict_proba(input_array)[0][1] * 100
 
-        # ✅ Define input dictionary
+        # Dictionary for logging
         input_data = {
             "age": age,
             "sex": sex,
@@ -69,10 +67,10 @@ if st.button("Check Risk"):
             "thal": thal
         }
 
-        # ✅ Save prediction AFTER defining input_data
+        # Save prediction to CSV
         save_prediction(input_data, prediction)
 
-        # ✅ Show result
+        # Show result
         st.success(f"🧠 Your predicted heart disease risk is **{round(prediction, 2)}%**.")
         if prediction > 70:
             st.warning("⚠️ This is a high risk. Please consult a medical professional.")

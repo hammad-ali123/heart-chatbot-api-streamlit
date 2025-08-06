@@ -81,3 +81,8 @@ if st.button("Check Risk"):
 
     except Exception as e:
         st.error(f"Something went wrong: {str(e)}")
+
+if os.path.exists(CSV_FILE):
+    with open(CSV_FILE, "rb") as f:
+        st.download_button("📥 Download All Predictions", f, file_name=CSV_FILE)
+

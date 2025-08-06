@@ -52,7 +52,7 @@ if st.button("Check Risk"):
         input_array = scaler.transform([input_list])
         prediction = model.predict_proba(input_array)[0][1] * 100
 
-        # Prepare input dict for saving
+        # ✅ Define input dictionary
         input_data = {
             "age": age,
             "sex": sex,
@@ -69,10 +69,10 @@ if st.button("Check Risk"):
             "thal": thal
         }
 
-        # Save prediction to CSV
+        # ✅ Save prediction AFTER defining input_data
         save_prediction(input_data, prediction)
 
-        # Show prediction result
+        # ✅ Show result
         st.success(f"🧠 Your predicted heart disease risk is **{round(prediction, 2)}%**.")
         if prediction > 70:
             st.warning("⚠️ This is a high risk. Please consult a medical professional.")

@@ -15,7 +15,7 @@ model = joblib.load("model.pkl")
 scaler = joblib.load("scaler.pkl")
 CSV_FILE = "prediction_history.csv"
 
-# PDF generation
+# Generate PDF report
 def generate_pdf(input_data, prediction):
     field_names = {
         "age": "Age",
@@ -35,22 +35,24 @@ def generate_pdf(input_data, prediction):
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
-    textobject = c.beginText(40, 750)
-    textobject.setFont("Helvetica", 12)
-    textobject.textLine("Heart Disease Risk Assessment Report")
-    textobject.textLine("--------------------------------------")
+    text = c.beginText(40, 750)
+    text.setFont("Helvetica", 12)
+
+    text.textLine("Heart Disease Risk Assessment Report")
+    text.textLine("--------------------------------------")
     for key, value in input_data.items():
         label = field_names.get(key, key)
-        textobject.textLine(f"{label}: {value}")
-    textobject.textLine(f"\nPredicted Risk: {round(prediction, 2)}%")
-    textobject.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    c.drawText(textobject)
+        text.textLine(f"{label}: {value}")
+    text.textLine(f"\nPredicted Risk: {round(prediction, 2)}%")
+    text.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    c.drawText(text)
     c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
 
-# Save to CSV
+# Save prediction
 def save_prediction(data, prediction):
     data["prediction (%)"] = round(prediction, 2)
     data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -60,7 +62,7 @@ def save_prediction(data, prediction):
     else:
         df.to_csv(CSV_FILE, mode='w', header=True, index=False)
 
-# Questions
+# Define questions
 questions = [
     {"key": "age", "text": "What is your age?", "type": int},
     {"key": "sex", "text": "What is your biological sex? (0 = Female, 1 = Male)", "type": int},
@@ -77,7 +79,7 @@ questions = [
     {"key": "thal", "text": "Thalassemia? (0=Normal, 1=Fixed, 2=Reversible)", "type": int}
 ]
 
-# Initialise session
+# Initial state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "current_q" not in st.session_state:
@@ -85,57 +87,59 @@ if "current_q" not in st.session_state:
 if "answers" not in st.session_state:
     st.session_state.answers = {}
 
-st.title("💬 Heart Risk Chatbot (Chat Mode)")
+# Title
+st.title("💬 Heart Disease Risk Chatbot (Chat Mode)")
 
-# Display chat history
-for msg in st.session_state.chat_history:
-    message(msg["text"], is_user=msg["is_user"])
+# Chat history with unique keys
+for i, msg in enumerate(st.session_state.chat_history):
+    message(msg["text"], is_user=msg["is_user"], key=f"{'user' if msg['is_user'] else 'bot'}-{i}")
 
-# Ask next question
+# Question flow
 if st.session_state.current_q < len(questions):
     q = questions[st.session_state.current_q]
     user_input = st.chat_input(q["text"])
 
     if user_input:
         try:
-            converted_input = q["type"](user_input)
-            st.session_state.answers[q["key"]] = converted_input
+            typed_input = q["type"](user_input)
+            st.session_state.answers[q["key"]] = typed_input
             st.session_state.chat_history.append({"text": q["text"], "is_user": False})
             st.session_state.chat_history.append({"text": user_input, "is_user": True})
             st.session_state.current_q += 1
             st.rerun()
         except ValueError:
             st.warning("Please enter a valid value.")
-else:
-    # Predict
-    features = [st.session_state.answers[k["key"]] for k in questions]
-    array = scaler.transform([features])
-    prediction = model.predict_proba(array)[0][1] * 100
 
-    # Save
+# All answers collected
+else:
+    inputs = [st.session_state.answers[q["key"]] for q in questions]
+    input_array = scaler.transform([inputs])
+    prediction = model.predict_proba(input_array)[0][1] * 100
+
     save_prediction(st.session_state.answers, prediction)
 
-    # Show result
-    st.success(f"🧠 Your heart disease risk is **{round(prediction, 2)}%**.")
+    st.success(f"🧠 Your predicted heart disease risk is **{round(prediction, 2)}%**.")
     if prediction > 70:
         st.warning("⚠️ High risk! Please consult a doctor.")
     elif prediction > 40:
         st.info("🔍 Moderate risk. A check-up is recommended.")
     else:
-        st.info("✅ Low risk. Keep up your healthy lifestyle!")
+        st.info("✅ Low risk. Great job keeping healthy!")
 
-    # Pie Chart
+    # Pie chart
     st.markdown("### 📊 Risk Distribution")
     fig, ax = plt.subplots()
-    ax.pie([prediction, 100 - prediction], labels=["At Risk", "No Risk"], colors=["red", "green"], autopct="%1.1f%%")
+    ax.pie([prediction, 100 - prediction], labels=["At Risk", "No Risk"],
+           colors=["red", "green"], autopct="%1.1f%%", startangle=90)
     ax.axis("equal")
     st.pyplot(fig)
 
     # PDF
     pdf = generate_pdf(st.session_state.answers, prediction)
-    st.download_button("📄 Download PDF Report", data=pdf, file_name="heart_risk_report.pdf", mime="application/pdf")
+    st.download_button("📄 Download PDF Report", data=pdf,
+                       file_name="heart_risk_report.pdf", mime="application/pdf")
 
-    # CSV
+    # CSV download
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE, "rb") as f:
             st.download_button("📥 Download All Predictions", f, file_name=CSV_FILE)

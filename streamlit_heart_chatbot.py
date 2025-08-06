@@ -45,8 +45,24 @@ def save_prediction(data, prediction):
     else:
         df.to_csv(CSV_FILE, mode='w', header=True, index=False)
 
-# Generate PDF report function
+# Generate PDF report function (updated with full field names)
 def generate_pdf(input_data, prediction):
+    field_names = {
+        "age": "Age",
+        "sex": "Sex (0=Female, 1=Male)",
+        "cp": "Chest Pain Type (0–3)",
+        "trestbps": "Resting Blood Pressure (mm Hg)",
+        "chol": "Cholesterol Level (mg/dl)",
+        "fbs": "Fasting Blood Sugar > 120 (0=No, 1=Yes)",
+        "restecg": "Resting ECG Result (0–2)",
+        "thalach": "Max Heart Rate Achieved",
+        "exang": "Exercise-Induced Angina (0=No, 1=Yes)",
+        "oldpeak": "ST Depression by Exercise",
+        "slope": "Slope of Peak Exercise ST",
+        "ca": "Major Vessels Colored (0–4)",
+        "thal": "Thalassemia (0=Normal, 1=Fixed, 2=Reversible)"
+    }
+
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     textobject = c.beginText(40, 750)
@@ -54,8 +70,11 @@ def generate_pdf(input_data, prediction):
 
     textobject.textLine("Heart Disease Risk Assessment Report")
     textobject.textLine("--------------------------------------")
+
     for key, value in input_data.items():
-        textobject.textLine(f"{key}: {value}")
+        full_label = field_names.get(key, key)
+        textobject.textLine(f"{full_label}: {value}")
+
     textobject.textLine(f"\nPredicted Risk: {round(prediction, 2)}%")
     textobject.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 

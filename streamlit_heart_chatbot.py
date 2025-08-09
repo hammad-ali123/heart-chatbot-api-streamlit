@@ -1,208 +1,223 @@
 import streamlit as st
-import joblib
 import numpy as np
+import joblib
 import matplotlib.pyplot as plt
-from datetime import datetime
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from datetime import datetime
 
-# -----------------------------
-# Model paths (Logistic Regression)
-# -----------------------------
-MODEL_PATH = "model.pkl"
-SCALER_PATH = "scaler.pkl"
-
+# ---------- Model / Scaler ----------
+MODEL_PATH = "model.pkl"     # compatible with LR or XGB saved as joblib
+SCALER_PATH = "scaler.pkl"   # StandardScaler saved as joblib
 model = joblib.load(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 
-# -----------------------------
-# Feature order, labels, validation
-# -----------------------------
-ORDER = [
-    "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
-    "thalach", "exang", "oldpeak", "slope", "ca", "thal"
+# ---------- Page ----------
+st.set_page_config(page_title="Heart Risk Chatbot", page_icon="🩺", layout="wide")
+st.title("🩺 Heart Disease Risk Chatbot")
+st.caption("Answer step‑by‑step. I’ll compute your risk right after the last question.")
+
+# ---------- Questions & validation ----------
+QUESTIONS = [
+    # key, prompt, min, max, allowed
+    ("age",       "Age?",                                  1,   120, None),
+    ("sex",       "Sex (0=Female, 1=Male)?",               0,   1,   {0,1}),
+    ("cp",        "Chest Pain Type (0–3)?",                0,   3,   {0,1,2,3}),
+    ("trestbps",  "Resting Blood Pressure (mm Hg)?",       80,  250, None),
+    ("chol",      "Cholesterol (mg/dl)?",                  100, 700, None),
+    ("fbs",       "Fasting Blood Sugar > 120 (0=No,1=Yes)?",0,  1,   {0,1}),
+    ("restecg",   "Resting ECG (0–2)?",                    0,   2,   {0,1,2}),
+    ("thalach",   "Max Heart Rate Achieved (bpm)?",        60,  250, None),
+    ("exang",     "Exercise‑Induced Angina (0=No,1=Yes)?", 0,   1,   {0,1}),
+    ("oldpeak",   "ST Depression by Exercise (e.g., 1.4)?",0.0, 6.5, None),
+    ("slope",     "Slope of Peak Exercise ST (0–2)?",      0,   2,   {0,1,2}),
+    ("ca",        "Major Vessels Colored (0–4)?",          0,   4,   {0,1,2,3,4}),
+    ("thal",      "Thalassemia (0=Normal,1=Fixed,2=Reversible)?", 0, 2, {0,1,2}),
 ]
 
-LABELS = {
-    "age": "Age",
-    "sex": "Sex (0=Female, 1=Male)",
-    "cp": "Chest Pain Type (0–3)",
-    "trestbps": "Resting Blood Pressure (mm Hg)",
-    "chol": "Cholesterol (mg/dl)",
-    "fbs": "Fasting Blood Sugar > 120 (0=No, 1=Yes)",
-    "restecg": "Resting ECG (0–2)",
-    "thalach": "Max Heart Rate Achieved (bpm)",
-    "exang": "Exercise-Induced Angina (0=No, 1=Yes)",
-    "oldpeak": "ST Depression by Exercise",
-    "slope": "Slope of Peak Exercise ST (0–2)",
-    "ca": "Major Vessels Coloured (0–4)",
-    "thal": "Thalassemia (0=Normal, 1=Fixed, 2=Reversible)"
-}
+ORDER = [q[0] for q in QUESTIONS]
 
-SCHEMA = {
-    "age":       {"type": int, "min": 1, "max": 120},
-    "sex":       {"type": int, "allowed": {0, 1}},
-    "cp":        {"type": int, "allowed": {0, 1, 2, 3}},
-    "trestbps":  {"type": int, "min": 80, "max": 250},
-    "chol":      {"type": int, "min": 100, "max": 700},
-    "fbs":       {"type": int, "allowed": {0, 1}},
-    "restecg":   {"type": int, "allowed": {0, 1, 2}},
-    "thalach":   {"type": int, "min": 60, "max": 250},
-    "exang":     {"type": int, "allowed": {0, 1}},
-    "oldpeak":   {"type": float, "min": 0.0, "max": 6.0},
-    "slope":     {"type": int, "allowed": {0, 1, 2}},
-    "ca":        {"type": int, "allowed": {0, 1, 2, 3, 4}},
-    "thal":      {"type": int, "allowed": {0, 1, 2}}
-}
+# ---------- Utils ----------
+def init_state():
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "idx" not in st.session_state:
+        st.session_state.idx = 0
+    if "answers" not in st.session_state:
+        st.session_state.answers = {}
+    if "done" not in st.session_state:
+        st.session_state.done = False
+    if "just_started" not in st.session_state:
+        st.session_state.just_started = True
 
-ASSISTANT_AVATAR = "🩺"
-USER_AVATAR = "🙂"
+def say_bot(text):
+    st.session_state.messages.append({"role": "assistant", "content": text})
 
-# -----------------------------
-# Helpers
-# -----------------------------
-def add_assistant_once(text: str):
-    last = next((m["content"] for m in reversed(st.session_state.messages)
-                 if m["role"] == "assistant"), None)
-    if last != text:
-        st.session_state.messages.append({"role": "assistant", "content": text})
+def say_user(text):
+    st.session_state.messages.append({"role": "user", "content": text})
 
-def parse_and_validate(key, raw):
-    spec = SCHEMA[key]
+def validate_value(key, raw):
+    """Return (ok, value_or_errmsg). Coerce ints/floats as needed."""
+    # decide type
+    is_float = (key == "oldpeak")
     try:
-        val = int(float(raw)) if spec["type"] == int else float(raw)
-    except ValueError:
-        return None, "❌ Please enter a valid number."
-    if "allowed" in spec and val not in spec["allowed"]:
-        return None, f"❌ Value must be one of: {', '.join(map(str, spec['allowed']))}."
-    if "min" in spec and val < spec["min"]:
-        return None, f"❌ Value too low. Min is {spec['min']}."
-    if "max" in spec and val > spec["max"]:
-        return None, f"❌ Value too high. Max is {spec['max']}."
-    return val, None
+        val = float(raw) if is_float else int(float(raw))
+    except Exception:
+        return False, "❌ Please enter a number."
 
-def generate_pdf(input_data, prediction_pct):
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
+    # get question meta
+    for k, prompt, vmin, vmax, allowed in QUESTIONS:
+        if k == key:
+            # allowed set check first (for categorical)
+            if allowed is not None and val not in allowed:
+                opts = ", ".join(map(str, sorted(list(allowed))))
+                return False, f"❌ Value must be one of: {opts}. Please re‑enter {prompt}"
+            # range check
+            if val < vmin or val > vmax:
+                return False, f"❌ Value out of range ({vmin}–{vmax}). Please re‑enter {prompt}"
+            # cast back to int if needed
+            if not is_float:
+                val = int(val)
+            return True, val
+    return False, "❌ Unknown field."
+
+def answers_to_array(ans_dict):
+    seq = [
+        ans_dict["age"], ans_dict["sex"], ans_dict["cp"], ans_dict["trestbps"],
+        ans_dict["chol"], ans_dict["fbs"], ans_dict["restecg"], ans_dict["thalach"],
+        ans_dict["exang"], ans_dict["oldpeak"], ans_dict["slope"], ans_dict["ca"],
+        ans_dict["thal"],
+    ]
+    return np.array(seq, dtype=float).reshape(1, -1)
+
+def predict_and_show():
+    # Assemble -> scale -> predict
+    X = answers_to_array(st.session_state.answers)
+    Xs = scaler.transform(X)
+    if hasattr(model, "predict_proba"):
+        prob = float(model.predict_proba(Xs)[0, 1]) * 100.0
+    else:
+        # For models without predict_proba, fall back to decision function
+        p = float(model.decision_function(Xs))
+        prob = 100.0 / (1.0 + np.exp(-p))
+    risk = round(prob, 2)
+
+    # Text result
+    if risk > 70:
+        verdict = "⚠️ High risk. Please consult a medical professional."
+    elif risk > 40:
+        verdict = "🔍 Moderate risk. A check‑up is recommended."
+    else:
+        verdict = "✅ Low risk. Keep up the healthy lifestyle!"
+
+    say_bot(f"🧠 **Predicted heart disease risk:** **{risk}%**\n\n{verdict}")
+
+    # Pie chart
+    labels = ["At Risk", "No Risk"]
+    sizes = [risk, 100 - risk]
+    colors = ["#e74c3c", "#2ecc71"]
+    fig, ax = plt.subplots()
+    ax.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
+    ax.axis("equal")
+    st.pyplot(fig)
+
+    # PDF download
+    pdf = make_pdf(st.session_state.answers, risk)
+    st.download_button(
+        "📄 Download PDF Report",
+        data=pdf,
+        file_name=f"heart_risk_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+        mime="application/pdf",
+    )
+
+    # Restart option
+    st.divider()
+    col1, col2 = st.columns([1,3])
+    with col1:
+        if st.button("🔄 Restart chat"):
+            for k in ["messages", "idx", "answers", "done", "just_started"]:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
+    with col2:
+        say_bot("If you’d like another assessment, type anything or press **Restart chat** above.")
+
+def make_pdf(data, risk):
+    labels = {
+        "age": "Age",
+        "sex": "Sex (0=Female, 1=Male)",
+        "cp": "Chest Pain Type (0–3)",
+        "trestbps": "Resting Blood Pressure (mm Hg)",
+        "chol": "Cholesterol (mg/dl)",
+        "fbs": "Fasting Blood Sugar > 120 (0=No,1=Yes)",
+        "restecg": "Resting ECG (0–2)",
+        "thalach": "Max Heart Rate Achieved (bpm)",
+        "exang": "Exercise‑Induced Angina (0=No,1=Yes)",
+        "oldpeak": "ST Depression by Exercise",
+        "slope": "Slope of Peak Exercise ST (0–2)",
+        "ca": "Major Vessels Colored (0–4)",
+        "thal": "Thalassemia (0=Normal,1=Fixed,2=Reversible)",
+    }
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
     t = c.beginText(40, 750)
     t.setFont("Helvetica", 12)
     t.textLine("Heart Disease Risk Assessment Report")
     t.textLine("--------------------------------------")
     for k in ORDER:
-        t.textLine(f"{LABELS[k]}: {input_data[k]}")
-    t.textLine("")
-    t.textLine(f"Predicted Risk: {round(prediction_pct, 2)}%")
+        t.textLine(f"{labels[k]}: {data[k]}")
+    t.textLine(f"\nPredicted Risk: {risk}%")
     t.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     c.drawText(t); c.showPage(); c.save()
-    buffer.seek(0)
-    return buffer
+    buf.seek(0)
+    return buf
 
-def reset_all():
-    st.session_state.phase = "ask"     # ask | confirm | done
-    st.session_state.step = 0
-    st.session_state.inputs = {}
-    st.session_state.messages = []
-    st.session_state.greeted = False
+# ---------- Init ----------
+init_state()
 
-# -----------------------------
-# Session init
-# -----------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "phase" not in st.session_state:
-    reset_all()
-if "greeted" not in st.session_state:
-    st.session_state.greeted = False
+# First welcome + first question (once)
+if st.session_state.just_started:
+    say_bot("Hi! I’ll ask you 13 quick questions and then show your result right away. "
+            "You can answer with numbers only. Let’s begin.")
+    # ask first
+    first_prompt = QUESTIONS[0][1]
+    say_bot(f"{first_prompt}")
+    st.session_state.just_started = False
 
-# -----------------------------
-# Header & Restart
-# -----------------------------
-st.title("🫀 Heart Disease Risk Chatbot")
-st.caption("I’ll ask a few questions and estimate your heart disease risk. "
-           "Inputs are range‑checked to keep them realistic.")
+# Render history
+for msg in st.session_state.messages:
+    with st.chat_message("assistant" if msg["role"]=="assistant" else "user"):
+        st.markdown(msg["content"])
 
-if st.button("🔄 Restart chat"):
-    reset_all()
-    st.rerun()
+# If already finished, do nothing (buttons shown above)
+if st.session_state.done:
+    st.stop()
 
-# -----------------------------
-# First greeting & first question (once)
-# -----------------------------
-if not st.session_state.greeted:
-    st.session_state.messages.append({"role": "assistant", "content": "👋 Hello! I’m your virtual triage assistant."})
-    st.session_state.messages.append({"role": "assistant", "content": "We’ll go step‑by‑step. Please answer with numbers exactly as requested."})
-    add_assistant_once(f"**{LABELS[ORDER[0]]}?**")
-    st.session_state.greeted = True
+# Chat input
+user_text = st.chat_input("Your answer...")
+if user_text is not None:
+    # Show user bubble
+    say_user(user_text)
 
-# -----------------------------
-# Chat input (PROCESS FIRST, then rerun to render)
-# -----------------------------
-user_text = st.chat_input("Your answer…")
+    # Validate current question
+    key, prompt, *_ = QUESTIONS[st.session_state.idx]
+    ok, val = validate_value(key, user_text)
 
-if user_text:
-    # Immediately store the user's message
-    st.session_state.messages.append({"role": "user", "content": user_text})
+    if not ok:
+        say_bot(val)                 # val contains the error message and prompt
+    else:
+        # Save, advance
+        st.session_state.answers[key] = val
+        st.session_state.idx += 1
 
-    if st.session_state.phase == "ask":
-        key = ORDER[st.session_state.step]
-        value, err = parse_and_validate(key, user_text)
-        if err:
-            add_assistant_once(err + f" Please re‑enter **{LABELS[key]}**.")
+        # If finished, show results immediately
+        if st.session_state.idx >= len(QUESTIONS):
+            st.session_state.done = True
+            predict_and_show()
         else:
-            st.session_state.inputs[key] = value
-            st.session_state.step += 1
-            if st.session_state.step == len(ORDER):
-                summary = "✅ Please confirm your details:\n"
-                for k in ORDER:
-                    summary += f"- **{LABELS[k]}:** {st.session_state.inputs[k]}\n"
-                summary += "\nType **YES** to confirm or **RESTART** to start over."
-                add_assistant_once(summary)
-                st.session_state.phase = "confirm"
-            else:
-                next_key = ORDER[st.session_state.step]
-                add_assistant_once(f"**{LABELS[next_key]}?**")
+            # Ask next question
+            next_prompt = QUESTIONS[st.session_state.idx][1]
+            say_bot(next_prompt)
 
-    elif st.session_state.phase == "confirm":
-        t = user_text.strip().lower()
-        if t == "restart":
-            reset_all()
-            st.rerun()
-        elif t == "yes":
-            X = scaler.transform([[st.session_state.inputs[k] for k in ORDER]])
-            pred_pct = float(model.predict_proba(X)[0][1] * 100.0)
-            msg = f"🧠 **Predicted heart disease risk: {pred_pct:.2f}%**"
-            if pred_pct > 70: msg += "\n⚠️ High risk. Please consult a medical professional."
-            elif pred_pct > 40: msg += "\n🔍 Moderate risk. A check-up is recommended."
-            else: msg += "\n✅ Low risk. Keep up the healthy lifestyle."
-            add_assistant_once(msg)
-
-            fig, ax = plt.subplots()
-            ax.pie([pred_pct, 100 - pred_pct],
-                   labels=['At Risk', 'No Risk'],
-                   colors=['#e74c3c', '#2ecc71'],
-                   autopct='%1.1f%%', startangle=90)
-            ax.axis('equal')
-            st.pyplot(fig)
-
-            pdf = generate_pdf(st.session_state.inputs, pred_pct)
-            st.download_button("📄 Download PDF Report", data=pdf,
-                               file_name="heart_risk_report.pdf", mime="application/pdf")
-            st.session_state.phase = "done"
-            add_assistant_once("If you’d like another assessment, type anything or press **Restart chat**.")
-        else:
-            add_assistant_once("❌ Please type **YES** to confirm or **RESTART** to start over.")
-
-    else:  # done
-        add_assistant_once("Type **RESTART** to begin again, or use the button above.")
-
-    # IMPORTANT: force immediate refresh so the new messages appear
+    # Re-render with updated messages
     st.rerun()
-
-# -----------------------------
-# Render messages (after any processing)
-# -----------------------------
-for m in st.session_state.messages:
-    avatar = ASSISTANT_AVATAR if m["role"] == "assistant" else USER_AVATAR
-    with st.chat_message(m["role"], avatar=avatar):
-        st.markdown(m["content"])

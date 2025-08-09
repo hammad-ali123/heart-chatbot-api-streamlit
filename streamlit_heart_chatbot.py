@@ -1,223 +1,224 @@
+# app.py — Chat style with validation, immediate results (pie + PDF), restart
+
 import streamlit as st
 import numpy as np
 import joblib
-import matplotlib.pyplot as plt
 from io import BytesIO
+import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from datetime import datetime
 
-# ---------- Model / Scaler ----------
-MODEL_PATH = "model.pkl"     # compatible with LR or XGB saved as joblib
-SCALER_PATH = "scaler.pkl"   # StandardScaler saved as joblib
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+st.set_page_config(page_title="Heart Disease Risk Chatbot", page_icon="🩺", layout="wide")
 
-# ---------- Page ----------
-st.set_page_config(page_title="Heart Risk Chatbot", page_icon="🩺", layout="wide")
-st.title("🩺 Heart Disease Risk Chatbot")
-st.caption("Answer step‑by‑step. I’ll compute your risk right after the last question.")
-
-# ---------- Questions & validation ----------
-QUESTIONS = [
-    # key, prompt, min, max, allowed
-    ("age",       "Age?",                                  1,   120, None),
-    ("sex",       "Sex (0=Female, 1=Male)?",               0,   1,   {0,1}),
-    ("cp",        "Chest Pain Type (0–3)?",                0,   3,   {0,1,2,3}),
-    ("trestbps",  "Resting Blood Pressure (mm Hg)?",       80,  250, None),
-    ("chol",      "Cholesterol (mg/dl)?",                  100, 700, None),
-    ("fbs",       "Fasting Blood Sugar > 120 (0=No,1=Yes)?",0,  1,   {0,1}),
-    ("restecg",   "Resting ECG (0–2)?",                    0,   2,   {0,1,2}),
-    ("thalach",   "Max Heart Rate Achieved (bpm)?",        60,  250, None),
-    ("exang",     "Exercise‑Induced Angina (0=No,1=Yes)?", 0,   1,   {0,1}),
-    ("oldpeak",   "ST Depression by Exercise (e.g., 1.4)?",0.0, 6.5, None),
-    ("slope",     "Slope of Peak Exercise ST (0–2)?",      0,   2,   {0,1,2}),
-    ("ca",        "Major Vessels Colored (0–4)?",          0,   4,   {0,1,2,3,4}),
-    ("thal",      "Thalassemia (0=Normal,1=Fixed,2=Reversible)?", 0, 2, {0,1,2}),
-]
-
-ORDER = [q[0] for q in QUESTIONS]
-
-# ---------- Utils ----------
-def init_state():
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "idx" not in st.session_state:
-        st.session_state.idx = 0
-    if "answers" not in st.session_state:
-        st.session_state.answers = {}
-    if "done" not in st.session_state:
-        st.session_state.done = False
-    if "just_started" not in st.session_state:
-        st.session_state.just_started = True
-
-def say_bot(text):
-    st.session_state.messages.append({"role": "assistant", "content": text})
-
-def say_user(text):
-    st.session_state.messages.append({"role": "user", "content": text})
-
-def validate_value(key, raw):
-    """Return (ok, value_or_errmsg). Coerce ints/floats as needed."""
-    # decide type
-    is_float = (key == "oldpeak")
+# ---------- Model loader (LR preferred, fallback to XGB/random forest etc.) ----------
+def load_model_and_scaler():
     try:
-        val = float(raw) if is_float else int(float(raw))
+        model = joblib.load("model.pkl")
+        scaler = joblib.load("scaler.pkl")
+        return model, scaler, "LR"
     except Exception:
-        return False, "❌ Please enter a number."
+        pass
+    model = joblib.load("model.pkl")
+    scaler = joblib.load("scaler.pkl")
+    return model, scaler, "MODEL"
 
-    # get question meta
-    for k, prompt, vmin, vmax, allowed in QUESTIONS:
-        if k == key:
-            # allowed set check first (for categorical)
-            if allowed is not None and val not in allowed:
-                opts = ", ".join(map(str, sorted(list(allowed))))
-                return False, f"❌ Value must be one of: {opts}. Please re‑enter {prompt}"
-            # range check
-            if val < vmin or val > vmax:
-                return False, f"❌ Value out of range ({vmin}–{vmax}). Please re‑enter {prompt}"
-            # cast back to int if needed
-            if not is_float:
-                val = int(val)
-            return True, val
-    return False, "❌ Unknown field."
+MODEL, SCALER, MODEL_KIND = load_model_and_scaler()
 
-def answers_to_array(ans_dict):
-    seq = [
-        ans_dict["age"], ans_dict["sex"], ans_dict["cp"], ans_dict["trestbps"],
-        ans_dict["chol"], ans_dict["fbs"], ans_dict["restecg"], ans_dict["thalach"],
-        ans_dict["exang"], ans_dict["oldpeak"], ans_dict["slope"], ans_dict["ca"],
-        ans_dict["thal"],
-    ]
-    return np.array(seq, dtype=float).reshape(1, -1)
+# ---------- Features & validation ----------
+FIELDS = [
+    dict(key="age",      label="Age?", kind="int",    min=1,   max=120, help=None),
+    dict(key="sex",      label="Sex (0=Female, 1=Male)?", kind="choice", choices=[0,1]),
+    dict(key="cp",       label="Chest Pain Type (0–3)?", kind="choice", choices=[0,1,2,3]),
+    dict(key="trestbps", label="Resting Blood Pressure (mm Hg)?", kind="int",    min=80,  max=220),
+    dict(key="chol",     label="Cholesterol (mg/dl)?",   kind="int",    min=100, max=700),
+    dict(key="fbs",      label="Fasting Blood Sugar > 120 (0=No, 1=Yes)?", kind="choice", choices=[0,1]),
+    dict(key="restecg",  label="Resting ECG (0–2)?",     kind="choice", choices=[0,1,2]),
+    dict(key="thalach",  label="Max Heart Rate Achieved (bpm)?", kind="int",    min=60,  max=250),
+    dict(key="exang",    label="Exercise‑Induced Angina (0=No, 1=Yes)?", kind="choice", choices=[0,1]),
+    dict(key="oldpeak",  label="ST Depression by Exercise (e.g., 1.0)?", kind="float",  min=0.0, max=10.0, step=0.1),
+    dict(key="slope",    label="Slope of Peak Exercise ST (0–2)?", kind="choice", choices=[0,1,2]),
+    dict(key="ca",       label="Major Vessels Colored (0–4)?", kind="choice", choices=[0,1,2,3,4]),
+    dict(key="thal",     label="Thalassemia (0=Normal,1=Fixed,2=Reversible)?", kind="choice", choices=[0,1,2]),
+]
+FEATURE_ORDER = [f["key"] for f in FIELDS]
 
-def predict_and_show():
-    # Assemble -> scale -> predict
-    X = answers_to_array(st.session_state.answers)
-    Xs = scaler.transform(X)
-    if hasattr(model, "predict_proba"):
-        prob = float(model.predict_proba(Xs)[0, 1]) * 100.0
+FULL_NAMES = {
+    "age":"Age", "sex":"Sex (0=Female, 1=Male)", "cp":"Chest Pain Type (0–3)",
+    "trestbps":"Resting BP (mm Hg)", "chol":"Cholesterol (mg/dl)", "fbs":"Fasting Blood Sugar >120",
+    "restecg":"Resting ECG (0–2)", "thalach":"Max Heart Rate (bpm)", "exang":"Exercise‑Induced Angina",
+    "oldpeak":"ST Depression by Exercise", "slope":"Slope of Peak Exercise ST",
+    "ca":"Major Vessels Colored (0–4)", "thal":"Thalassemia (0=Normal,1=Fixed,2=Reversible)"
+}
+
+# ---------- Session state ----------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "intro_shown" not in st.session_state:
+    st.session_state.intro_shown = False
+if "idx" not in st.session_state:
+    st.session_state.idx = 0
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
+if "stage" not in st.session_state:
+    st.session_state.stage = "asking"   # asking | done
+
+# ---------- Helpers ----------
+def add_msg(role, text):
+    st.session_state.messages.append({"role": role, "text": text})
+
+def current_field():
+    return FIELDS[st.session_state.idx]
+
+def ask_question_once():
+    """Ask the current question exactly once."""
+    q = current_field()["label"]
+    add_msg("assistant", q)
+
+def parse_and_validate(raw, field):
+    raw = raw.strip()
+    kind = field["kind"]
+
+    if kind == "choice":
+        try:
+            v = int(raw)
+        except ValueError:
+            return None, f"❌ Please enter one of: {', '.join(map(str, field['choices']))}."
+        if v not in field["choices"]:
+            return None, f"❌ Value must be one of: {', '.join(map(str, field['choices']))}."
+        return v, None
+
+    if kind == "int":
+        try: v = int(raw)
+        except ValueError: return None, "❌ Please enter a whole number."
+        if v < field["min"] or v > field["max"]:
+            return None, f"❌ Value out of range ({field['min']}–{field['max']})."
+        return v, None
+
+    if kind == "float":
+        try: v = float(raw)
+        except ValueError: return None, "❌ Please enter a number (e.g., 1.0)."
+        if v < field["min"] or v > field["max"]:
+            return None, f"❌ Value out of range ({field['min']}–{field['max']})."
+        # round to sensible step for display
+        step = field.get("step", 0.1)
+        v = round(v/step)*step
+        return v, None
+
+    return None, "❌ Invalid input."
+
+def predict_prob(answers):
+    x = [answers[k] for k in FEATURE_ORDER]
+    x_scaled = SCALER.transform([x])
+    if hasattr(MODEL, "predict_proba"):
+        p = MODEL.predict_proba(x_scaled)[0][1]
     else:
-        # For models without predict_proba, fall back to decision function
-        p = float(model.decision_function(Xs))
-        prob = 100.0 / (1.0 + np.exp(-p))
-    risk = round(prob, 2)
+        # e.g., SVM decision_function → sigmoid fallback
+        z = MODEL.decision_function(x_scaled)[0]
+        p = 1.0/(1.0+np.exp(-z))
+    return float(p)
 
-    # Text result
-    if risk > 70:
-        verdict = "⚠️ High risk. Please consult a medical professional."
-    elif risk > 40:
-        verdict = "🔍 Moderate risk. A check‑up is recommended."
-    else:
-        verdict = "✅ Low risk. Keep up the healthy lifestyle!"
+def risk_text(pct):
+    if pct >= 70:  return "⚠️ High risk. Please consult a medical professional."
+    if pct >= 40:  return "🔍 Moderate risk. A check‑up is recommended."
+    return "✅ Low risk. Keep up the healthy lifestyle!"
 
-    say_bot(f"🧠 **Predicted heart disease risk:** **{risk}%**\n\n{verdict}")
-
-    # Pie chart
-    labels = ["At Risk", "No Risk"]
-    sizes = [risk, 100 - risk]
-    colors = ["#e74c3c", "#2ecc71"]
-    fig, ax = plt.subplots()
-    ax.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
-    ax.axis("equal")
-    st.pyplot(fig)
-
-    # PDF download
-    pdf = make_pdf(st.session_state.answers, risk)
-    st.download_button(
-        "📄 Download PDF Report",
-        data=pdf,
-        file_name=f"heart_risk_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-        mime="application/pdf",
-    )
-
-    # Restart option
-    st.divider()
-    col1, col2 = st.columns([1,3])
-    with col1:
-        if st.button("🔄 Restart chat"):
-            for k in ["messages", "idx", "answers", "done", "just_started"]:
-                if k in st.session_state: del st.session_state[k]
-            st.rerun()
-    with col2:
-        say_bot("If you’d like another assessment, type anything or press **Restart chat** above.")
-
-def make_pdf(data, risk):
-    labels = {
-        "age": "Age",
-        "sex": "Sex (0=Female, 1=Male)",
-        "cp": "Chest Pain Type (0–3)",
-        "trestbps": "Resting Blood Pressure (mm Hg)",
-        "chol": "Cholesterol (mg/dl)",
-        "fbs": "Fasting Blood Sugar > 120 (0=No,1=Yes)",
-        "restecg": "Resting ECG (0–2)",
-        "thalach": "Max Heart Rate Achieved (bpm)",
-        "exang": "Exercise‑Induced Angina (0=No,1=Yes)",
-        "oldpeak": "ST Depression by Exercise",
-        "slope": "Slope of Peak Exercise ST (0–2)",
-        "ca": "Major Vessels Colored (0–4)",
-        "thal": "Thalassemia (0=Normal,1=Fixed,2=Reversible)",
-    }
+def make_pdf(answers, pct):
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     t = c.beginText(40, 750)
     t.setFont("Helvetica", 12)
     t.textLine("Heart Disease Risk Assessment Report")
-    t.textLine("--------------------------------------")
-    for k in ORDER:
-        t.textLine(f"{labels[k]}: {data[k]}")
-    t.textLine(f"\nPredicted Risk: {risk}%")
-    t.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    c.drawText(t); c.showPage(); c.save()
+    t.textLine("------------------------------------")
+    for k in FEATURE_ORDER:
+        t.textLine(f"{FULL_NAMES[k]}: {answers[k]}")
+    t.textLine("")
+    t.textLine(f"Predicted risk: {pct:.2f}%")
+    c.drawText(t)
+    c.showPage()
+    c.save()
     buf.seek(0)
     return buf
 
-# ---------- Init ----------
-init_state()
+def show_results_block():
+    pct = predict_prob(st.session_state.answers)*100.0
 
-# First welcome + first question (once)
-if st.session_state.just_started:
-    say_bot("Hi! I’ll ask you 13 quick questions and then show your result right away. "
-            "You can answer with numbers only. Let’s begin.")
-    # ask first
-    first_prompt = QUESTIONS[0][1]
-    say_bot(f"{first_prompt}")
-    st.session_state.just_started = False
+    with st.chat_message("assistant"):
+        st.markdown(f"**🧠 Predicted heart disease risk:** **{pct:.2f}%**")
+        st.markdown(risk_text(pct))
 
-# Render history
-for msg in st.session_state.messages:
-    with st.chat_message("assistant" if msg["role"]=="assistant" else "user"):
-        st.markdown(msg["content"])
+        # Pie chart inside the chat bubble
+        fig, ax = plt.subplots()
+        parts = [pct, 100-pct]
+        ax.pie(parts, labels=["At Risk", "No Risk"], autopct="%1.1f%%", startangle=90)
+        ax.axis("equal")
+        st.pyplot(fig)
 
-# If already finished, do nothing (buttons shown above)
-if st.session_state.done:
-    st.stop()
+        # PDF download
+        pdf = make_pdf(st.session_state.answers, pct)
+        st.download_button("📄 Download PDF Report", data=pdf,
+                           file_name="heart_risk_report.pdf", mime="application/pdf")
 
-# Chat input
-user_text = st.chat_input("Your answer...")
-if user_text is not None:
-    # Show user bubble
-    say_user(user_text)
+    add_msg("assistant", "If you’d like another assessment, type **restart** or press the **Restart chat** button above.")
+    st.session_state.stage = "done"
 
-    # Validate current question
-    key, prompt, *_ = QUESTIONS[st.session_state.idx]
-    ok, val = validate_value(key, user_text)
-
-    if not ok:
-        say_bot(val)                 # val contains the error message and prompt
-    else:
-        # Save, advance
-        st.session_state.answers[key] = val
-        st.session_state.idx += 1
-
-        # If finished, show results immediately
-        if st.session_state.idx >= len(QUESTIONS):
-            st.session_state.done = True
-            predict_and_show()
-        else:
-            # Ask next question
-            next_prompt = QUESTIONS[st.session_state.idx][1]
-            say_bot(next_prompt)
-
-    # Re-render with updated messages
+def restart():
+    for k in ["messages","intro_shown","idx","answers","stage"]:
+        if k in st.session_state: del st.session_state[k]
     st.rerun()
+
+# ---------- Header + Restart ----------
+col1, col2 = st.columns([0.78, 0.22])
+with col1:
+    st.markdown("## 🩺 Heart Disease Risk Chatbot")
+    st.caption("I’ll guide you through 13 quick questions and show your result right away.")
+with col2:
+    st.button("🔁 Restart chat", use_container_width=True, on_click=restart)
+
+# ---------- Render prior messages ----------
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["text"])
+
+# ---------- Intro & first prompt (once) ----------
+if not st.session_state.intro_shown:
+    add_msg("assistant", "👋 Hello! I’m your virtual triage assistant.")
+    add_msg("assistant", "We’ll go step‑by‑step. Please answer with numbers exactly as requested.")
+    st.session_state.intro_shown = True
+    ask_question_once()
+
+# ---------- Chat input ----------
+raw = st.chat_input("Your answer…")
+
+if raw is not None:
+    # echo user message
+    with st.chat_message("user"):
+        st.markdown(raw)
+    add_msg("user", raw)
+
+    # If already finished, allow restart by typing 'restart'
+    if st.session_state.stage == "done":
+        if raw.strip().lower() == "restart":
+            restart()
+        else:
+            add_msg("assistant", "Type **restart** to begin again, or use the button above.")
+            with st.chat_message("assistant"):
+                st.markdown("Type **restart** to begin again, or use the button above.")
+    else:
+        # parse/validate current answer
+        field = current_field()
+        val, err = parse_and_validate(raw, field)
+        if err:
+            add_msg("assistant", err)
+            with st.chat_message("assistant"):
+                st.markdown(err)
+        else:
+            st.session_state.answers[field["key"]] = val
+            st.session_state.idx += 1
+
+            # Next question or results
+            if st.session_state.idx < len(FIELDS):
+                ask_question_once()
+                with st.chat_message("assistant"):
+                    st.markdown(FIELDS[st.session_state.idx]["label"])
+            else:
+                show_results_block()

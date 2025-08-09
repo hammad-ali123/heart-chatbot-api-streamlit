@@ -210,7 +210,7 @@ def show_results():
     c1, c2 = st.columns([0.6, 0.4])
     with c1:
         st.markdown("#### Risk distribution")
-        st.image(fig_png, use_column_width=False)
+        st.image(fig_png, use_container_width=False)
     with c2:
         st.markdown("#### Download your report")
         st.download_button(

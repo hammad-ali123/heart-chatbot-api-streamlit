@@ -8,8 +8,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 # ========= Load model & scaler =========
-model = joblib.load("lr_model.pkl")
-scaler = joblib.load("lr_scaler.pkl")
+model = joblib.load("model.pkl")
+scaler = joblib.load("scaler.pkl")
 
 st.set_page_config(page_title="Heart Disease Risk Chatbot", page_icon="🫀")
 st.title("🫀 Heart Disease Risk Chatbot (Chat-Style)")

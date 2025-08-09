@@ -7,19 +7,18 @@ from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-# =========================
-# Load LR model & scaler
-# =========================
-# Make sure these filenames match the ones you uploaded
+# -----------------------------
+# Model paths (Logistic Regression)
+# -----------------------------
 MODEL_PATH = "model.pkl"
 SCALER_PATH = "scaler.pkl"
 
 model = joblib.load(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 
-# =========================
-# Schema & labels
-# =========================
+# -----------------------------
+# Feature order, labels, validation
+# -----------------------------
 ORDER = [
     "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
     "thalach", "exang", "oldpeak", "slope", "ca", "thal"
@@ -41,7 +40,6 @@ LABELS = {
     "thal": "Thalassemia (0=Normal, 1=Fixed, 2=Reversible)"
 }
 
-# Realistic ranges/allowed values
 SCHEMA = {
     "age":       {"type": int, "min": 1, "max": 120},
     "sex":       {"type": int, "allowed": {0, 1}},
@@ -61,17 +59,13 @@ SCHEMA = {
 ASSISTANT_AVATAR = "🩺"
 USER_AVATAR = "🙂"
 
-# =========================
-# Utilities
-# =========================
+# -----------------------------
+# Helpers
+# -----------------------------
 def add_assistant_once(text: str):
-    """Append assistant message only if it's not identical to the last assistant message."""
-    last_assistant = None
-    for m in reversed(st.session_state.messages):
-        if m["role"] == "assistant":
-            last_assistant = m["content"]
-            break
-    if last_assistant != text:
+    last = next((m["content"] for m in reversed(st.session_state.messages)
+                 if m["role"] == "assistant"), None)
+    if last != text:
         st.session_state.messages.append({"role": "assistant", "content": text})
 
 def parse_and_validate(key, raw):
@@ -80,7 +74,6 @@ def parse_and_validate(key, raw):
         val = int(float(raw)) if spec["type"] == int else float(raw)
     except ValueError:
         return None, "❌ Please enter a valid number."
-
     if "allowed" in spec and val not in spec["allowed"]:
         return None, f"❌ Value must be one of: {', '.join(map(str, spec['allowed']))}."
     if "min" in spec and val < spec["min"]:
@@ -94,7 +87,6 @@ def generate_pdf(input_data, prediction_pct):
     c = canvas.Canvas(buffer, pagesize=letter)
     t = c.beginText(40, 750)
     t.setFont("Helvetica", 12)
-
     t.textLine("Heart Disease Risk Assessment Report")
     t.textLine("--------------------------------------")
     for k in ORDER:
@@ -102,22 +94,20 @@ def generate_pdf(input_data, prediction_pct):
     t.textLine("")
     t.textLine(f"Predicted Risk: {round(prediction_pct, 2)}%")
     t.textLine(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    c.drawText(t)
-    c.showPage()
-    c.save()
+    c.drawText(t); c.showPage(); c.save()
     buffer.seek(0)
     return buffer
 
 def reset_all():
-    st.session_state.phase = "ask"          # ask | confirm | done
+    st.session_state.phase = "ask"     # ask | confirm | done
     st.session_state.step = 0
     st.session_state.inputs = {}
     st.session_state.messages = []
     st.session_state.greeted = False
 
-# =========================
+# -----------------------------
 # Session init
-# =========================
+# -----------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "phase" not in st.session_state:
@@ -125,58 +115,44 @@ if "phase" not in st.session_state:
 if "greeted" not in st.session_state:
     st.session_state.greeted = False
 
-# =========================
-# Header + Restart
-# =========================
+# -----------------------------
+# Header & Restart
+# -----------------------------
 st.title("🫀 Heart Disease Risk Chatbot")
 st.caption("I’ll ask a few questions and estimate your heart disease risk. "
            "Inputs are range‑checked to keep them realistic.")
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    if st.button("🔄 Restart chat"):
-        reset_all()
-        st.rerun()
+if st.button("🔄 Restart chat"):
+    reset_all()
+    st.rerun()
 
-# =========================
-# Greeting & first prompt (once)
-# =========================
+# -----------------------------
+# First greeting & first question (once)
+# -----------------------------
 if not st.session_state.greeted:
     st.session_state.messages.append({"role": "assistant", "content": "👋 Hello! I’m your virtual triage assistant."})
     st.session_state.messages.append({"role": "assistant", "content": "We’ll go step‑by‑step. Please answer with numbers exactly as requested."})
-    first_q = f"**{LABELS[ORDER[0]]}?**"
-    add_assistant_once(first_q)
+    add_assistant_once(f"**{LABELS[ORDER[0]]}?**")
     st.session_state.greeted = True
 
-# =========================
-# Render history
-# =========================
-for m in st.session_state.messages:
-    avatar = ASSISTANT_AVATAR if m["role"] == "assistant" else USER_AVATAR
-    with st.chat_message(m["role"], avatar=avatar):
-        st.markdown(m["content"])
-
-# =========================
-# One chat input for the whole app
-# =========================
+# -----------------------------
+# Chat input (PROCESS FIRST, then rerun to render)
+# -----------------------------
 user_text = st.chat_input("Your answer…")
+
 if user_text:
-    # Always echo the user message exactly once
+    # Immediately store the user's message
     st.session_state.messages.append({"role": "user", "content": user_text})
 
     if st.session_state.phase == "ask":
-        # Validate the current step
         key = ORDER[st.session_state.step]
         value, err = parse_and_validate(key, user_text)
         if err:
             add_assistant_once(err + f" Please re‑enter **{LABELS[key]}**.")
         else:
-            # Store value and move forward
             st.session_state.inputs[key] = value
             st.session_state.step += 1
-
             if st.session_state.step == len(ORDER):
-                # All inputs collected → show summary & ask to confirm
                 summary = "✅ Please confirm your details:\n"
                 for k in ORDER:
                     summary += f"- **{LABELS[k]}:** {st.session_state.inputs[k]}\n"
@@ -184,7 +160,6 @@ if user_text:
                 add_assistant_once(summary)
                 st.session_state.phase = "confirm"
             else:
-                # Ask the next question (only once)
                 next_key = ORDER[st.session_state.step]
                 add_assistant_once(f"**{LABELS[next_key]}?**")
 
@@ -194,43 +169,40 @@ if user_text:
             reset_all()
             st.rerun()
         elif t == "yes":
-            # Predict
             X = scaler.transform([[st.session_state.inputs[k] for k in ORDER]])
             pred_pct = float(model.predict_proba(X)[0][1] * 100.0)
+            msg = f"🧠 **Predicted heart disease risk: {pred_pct:.2f}%**"
+            if pred_pct > 70: msg += "\n⚠️ High risk. Please consult a medical professional."
+            elif pred_pct > 40: msg += "\n🔍 Moderate risk. A check-up is recommended."
+            else: msg += "\n✅ Low risk. Keep up the healthy lifestyle."
+            add_assistant_once(msg)
 
-            result_msg = f"🧠 **Predicted heart disease risk: {pred_pct:.2f}%**"
-            if pred_pct > 70:
-                result_msg += "\n⚠️ High risk. Please consult a medical professional."
-            elif pred_pct > 40:
-                result_msg += "\n🔍 Moderate risk. A check-up is recommended."
-            else:
-                result_msg += "\n✅ Low risk. Keep up the healthy lifestyle."
-            add_assistant_once(result_msg)
-
-            # Pie chart
             fig, ax = plt.subplots()
             ax.pie([pred_pct, 100 - pred_pct],
                    labels=['At Risk', 'No Risk'],
                    colors=['#e74c3c', '#2ecc71'],
-                   autopct='%1.1f%%',
-                   startangle=90)
+                   autopct='%1.1f%%', startangle=90)
             ax.axis('equal')
             st.pyplot(fig)
 
-            # PDF
             pdf = generate_pdf(st.session_state.inputs, pred_pct)
-            st.download_button(
-                "📄 Download PDF Report",
-                data=pdf,
-                file_name="heart_risk_report.pdf",
-                mime="application/pdf"
-            )
-
+            st.download_button("📄 Download PDF Report", data=pdf,
+                               file_name="heart_risk_report.pdf", mime="application/pdf")
             st.session_state.phase = "done"
             add_assistant_once("If you’d like another assessment, type anything or press **Restart chat**.")
         else:
             add_assistant_once("❌ Please type **YES** to confirm or **RESTART** to start over.")
 
-    else:  # phase == "done"
+    else:  # done
         add_assistant_once("Type **RESTART** to begin again, or use the button above.")
 
+    # IMPORTANT: force immediate refresh so the new messages appear
+    st.rerun()
+
+# -----------------------------
+# Render messages (after any processing)
+# -----------------------------
+for m in st.session_state.messages:
+    avatar = ASSISTANT_AVATAR if m["role"] == "assistant" else USER_AVATAR
+    with st.chat_message(m["role"], avatar=avatar):
+        st.markdown(m["content"])
